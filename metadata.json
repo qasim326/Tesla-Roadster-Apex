@@ -1,0 +1,6 @@
+{
+  "name": "Roadster Apex",
+  "description": "High-speed SpaceX thruster hypercar highway racer with hydraulic suspension jumps, mid-air cold-gas thrusters, and a live 3D studio configurator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
