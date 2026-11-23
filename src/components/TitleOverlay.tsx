@@ -1,9 +1,22 @@
 import React from 'react';
-import { CloudFog, CloudRain, SlidersHorizontal, Sun, Volume2, VolumeX } from 'lucide-react';
+import {
+  Award,
+  CloudFog,
+  CloudRain,
+  Coins,
+  Flag,
+  Rocket,
+  SlidersHorizontal,
+  Sun,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import { getPilotRank } from '../data/missionsAndCampaign';
 import {
   BestRecord,
   CAR_MODEL_META,
   CarSpec,
+  MissionsProgressState,
   WEATHER_CONFIGS,
   WeatherCondition,
 } from '../types/game';
@@ -15,7 +28,10 @@ interface TitleOverlayProps {
   weather: WeatherCondition;
   studioOpen: boolean;
   muted: boolean;
-  onStartDrive: () => void;
+  missionsState: MissionsProgressState;
+  onStartEndless: () => void;
+  onOpenCampaign: () => void;
+  onOpenMissions: () => void;
   onToggleStudio: () => void;
   onToggleMute: () => void;
   onChangeWeather: (w: WeatherCondition) => void;
@@ -33,33 +49,46 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
   weather,
   studioOpen,
   muted,
-  onStartDrive,
+  missionsState,
+  onStartEndless,
+  onOpenCampaign,
+  onOpenMissions,
   onToggleStudio,
   onToggleMute,
   onChangeWeather,
 }) => {
   const modelMeta = CAR_MODEL_META[carSpec.carModel];
   const weatherMeta = WEATHER_CONFIGS[weather];
+  const pilotRank = getPilotRank(missionsState.missionsCompleted);
+  const claimableCount = missionsState.activeMissions.filter((m) => m.completed).length;
 
   return (
     <div className="fixed inset-0 z-20 pointer-events-none select-none">
       {/* Compact left edge scrim so typography stays crisp while keeping center car unobstructed */}
       <div
-        className="absolute inset-y-0 left-0 w-full max-w-[480px] pointer-events-none"
+        className="absolute inset-y-0 left-0 w-full max-w-[490px] pointer-events-none"
         style={{
           background:
-            'linear-gradient(90deg, rgba(6,10,18,0.82) 0%, rgba(6,10,18,0.4) 55%, rgba(6,10,18,0) 100%)',
+            'linear-gradient(90deg, rgba(6,10,18,0.84) 0%, rgba(6,10,18,0.42) 55%, rgba(6,10,18,0) 100%)',
         }}
       />
 
-      {/* Top Metadata Strip & Dynamic Weather Switcher */}
-      <header className="relative z-10 flex flex-wrap items-center justify-between gap-3 px-6 sm:px-8 pt-6">
-        <div className="flex items-center gap-2.5 text-[11px] font-mono-tech tracking-wider uppercase whitespace-nowrap">
+      {/* Top Metadata Strip, Pilot Rank & Dynamic Weather Switcher */}
+      <header className="relative z-10 flex flex-wrap items-center justify-between gap-3 px-4 sm:px-8 pt-4 sm:pt-6">
+        <div className="flex flex-wrap items-center gap-2.5 text-[11px] font-mono-tech tracking-wider uppercase whitespace-nowrap">
           <span className="text-amber-400 font-semibold">SPACEX EDITION</span>
           <span className="text-slate-500" aria-hidden="true">·</span>
           <span className="text-slate-300">{modelMeta.name}</span>
           <span className="text-slate-500" aria-hidden="true">·</span>
-          <span className="text-cyan-400 font-semibold">{modelMeta.topSpeedKmh} KM/H</span>
+          <span className="inline-flex items-center gap-1 text-cyan-300 font-semibold">
+            <Award className="w-3.5 h-3.5 text-amber-400" />
+            LVL {pilotRank.level} {pilotRank.title}
+          </span>
+          <span className="text-slate-500 hidden sm:inline" aria-hidden="true">·</span>
+          <span className="hidden sm:inline-flex items-center gap-1 text-amber-300 font-semibold">
+            <Coins className="w-3.5 h-3.5" />
+            {missionsState.coins.toLocaleString()} CR
+          </span>
         </div>
 
         <div className="flex items-center gap-2.5 pointer-events-auto">
@@ -109,7 +138,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
       </header>
 
       {/* Compact Left Hero Block leaving center lobby car completely clear */}
-      <main className="relative z-10 px-6 sm:px-8 pt-8 sm:pt-14 max-w-[400px] pointer-events-auto">
+      <main className="relative z-10 px-4 sm:px-8 pt-6 sm:pt-12 max-w-[430px] pointer-events-auto">
         <svg
           width="320"
           height="14"
@@ -150,23 +179,59 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
           </span>
         </h1>
 
-        <p className="mt-4 text-xs sm:text-sm leading-relaxed text-slate-300 max-w-[340px]">
+        <p className="mt-3.5 text-xs sm:text-sm leading-relaxed text-slate-300 max-w-[350px]">
           Launch over highway traffic with hydraulic jumps and ignite SpaceX cold-gas
-          thrusters across molten viaduct breaches.
+          thrusters across molten viaduct breaches and Mars expeditions.
         </p>
 
-        {/* Primary & Secondary Actions */}
-        <div className="mt-6 flex flex-wrap items-center gap-2.5">
+        {/* Primary Play Modes: Endless Mode + Campaign Mode */}
+        <div className="mt-5 flex flex-wrap items-center gap-2.5">
           <button
             type="button"
             onClick={() => {
               soundEngine.playUiClick();
-              onStartDrive();
+              onStartEndless();
             }}
-            className="flex items-center gap-2.5 px-5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-display text-sm font-bold tracking-wider transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-lg"
+            className="flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-display text-sm font-bold tracking-wider transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-lg"
           >
-            <span>START DRIVE</span>
-            <span className="font-mono-tech text-xs opacity-75">[ENTER]</span>
+            <span>ENDLESS MODE</span>
+            <span className="font-mono-tech text-[11px] opacity-75 hidden sm:inline">[ENTER]</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playUiClick();
+              onOpenCampaign();
+            }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-display text-sm font-bold tracking-wider transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-lg"
+          >
+            <Flag className="w-4 h-4" />
+            <span>CAMPAIGN MODE</span>
+          </button>
+        </div>
+
+        {/* Secondary Actions: Missions & Customize */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playUiClick();
+              onOpenMissions();
+            }}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#121826]/90 border border-white/15 hover:border-cyan-400/50 text-slate-100 font-display text-xs sm:text-sm font-semibold tracking-wider transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Rocket className="w-3.5 h-3.5 text-cyan-400" />
+            <span>MISSIONS</span>
+            <span
+              className={`font-mono-tech text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                claimableCount > 0
+                  ? 'bg-emerald-400 text-slate-950'
+                  : 'bg-white/10 text-amber-300'
+              }`}
+            >
+              {claimableCount > 0 ? `${claimableCount} READY` : '3 ACTIVE'}
+            </span>
           </button>
 
           <button
@@ -175,7 +240,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
               soundEngine.playUiClick();
               onToggleStudio();
             }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border font-display text-sm font-semibold tracking-wider transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg border font-display text-xs sm:text-sm font-semibold tracking-wider transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               studioOpen
                 ? 'bg-[#121826]/95 border-amber-400 text-white'
                 : 'bg-[#121826]/85 border-white/15 text-slate-100 hover:border-white/30'

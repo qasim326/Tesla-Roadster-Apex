@@ -1,5 +1,11 @@
 import * as THREE from 'three';
-import { THRUSTER_THEMES, ThrusterColorKey, WeatherCondition } from '../types/game';
+import {
+  CampaignStageId,
+  PlayMode,
+  THRUSTER_THEMES,
+  ThrusterColorKey,
+  WeatherCondition,
+} from '../types/game';
 import { ProceduralTextures } from './textures';
 
 export const ROAD_HALF_WIDTH = 8.2;
@@ -26,7 +32,17 @@ export interface RoadSegment {
 
 export interface ObstacleEntity {
   id: number;
-  kind: 'barrier' | 'sedan' | 'suv' | 'truck' | 'pad';
+  kind:
+    | 'barrier'
+    | 'sedan'
+    | 'suv'
+    | 'truck'
+    | 'pad'
+    | 'ramp'
+    | 'orb'
+    | 'meteor'
+    | 'gate'
+    | 'finishArch';
   mesh: THREE.Group;
   x: number;
   z: number;
@@ -37,6 +53,7 @@ export interface ObstacleEntity {
   active: boolean;
   resolved: boolean;
   nearMissAwarded: boolean;
+  overtaken: boolean;
 }
 
 interface ParticleItem {
@@ -61,6 +78,7 @@ export interface WorldManager {
   group: THREE.Group;
   segments: RoadSegment[];
   obstacles: ObstacleEntity[];
+  setStageConfig: (playMode: PlayMode, campaignStage: CampaignStageId) => void;
   resetForShowroom: () => void;
   resetForPlay: () => void;
   updateLobbyCruise: (dt: number, cruiseSpeedMps: number) => void;
@@ -133,18 +151,22 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
   const roadMat = trackMat(
     new THREE.MeshStandardMaterial({
       map: textures.roadAlbedo,
+      normalMap: textures.roadNormal,
+      normalScale: new THREE.Vector2(0.55, 0.55),
       roughnessMap: textures.roadRoughness,
       roughness: 0.3,
       metalness: 0.25,
-      envMapIntensity: 1.2,
+      envMapIntensity: 1.25,
     }),
   );
 
   const curbMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0x151a24,
-      roughness: 0.55,
-      metalness: 0.35,
+      normalMap: textures.roadNormal,
+      normalScale: new THREE.Vector2(0.25, 0.25),
+      roughness: 0.52,
+      metalness: 0.38,
     }),
   );
 
@@ -152,7 +174,7 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
     new THREE.MeshStandardMaterial({
       color: 0x0c1018,
       roughness: 0.78,
-      metalness: 0.2,
+      metalness: 0.22,
     }),
   );
 
@@ -253,6 +275,54 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
   const deepLavaFloor = new THREE.Mesh(deepLavaGeo, lavaMat);
   deepLavaFloor.position.set(0, -14.5, -160);
   group.add(deepLavaFloor);
+
+  // Stage 5 Red Martian Canyon Terrain & Outcrops (shown in Mars Colony Arrival)
+  const marsTerrainGroup = new THREE.Group();
+  const marsDustMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x7c2d12,
+      roughness: 0.92,
+      metalness: 0.04,
+      normalMap: textures.roadNormal,
+      normalScale: new THREE.Vector2(0.4, 0.4),
+    }),
+  );
+  const marsSideGeo = trackGeo(new THREE.PlaneGeometry(90, 460));
+  marsSideGeo.rotateX(-Math.PI / 2);
+  const marsLeft = new THREE.Mesh(marsSideGeo, marsDustMat);
+  marsLeft.position.set(-54, -9.5, -160);
+  marsTerrainGroup.add(marsLeft);
+  const marsRight = new THREE.Mesh(marsSideGeo, marsDustMat);
+  marsRight.position.set(54, -9.5, -160);
+  marsTerrainGroup.add(marsRight);
+
+  const marsRockGeo = trackGeo(new THREE.DodecahedronGeometry(3.2, 0));
+  const marsRockMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x9a3412,
+      roughness: 0.88,
+      metalness: 0.08,
+    }),
+  );
+  const marsRocks = new THREE.InstancedMesh(marsRockGeo, marsRockMat, 36);
+  for (let i = 0; i < 36; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    _dummy.position.set(
+      side * (16 + Math.random() * 44),
+      -9.0,
+      40 - Math.floor(i / 2) * 23 - Math.random() * 10,
+    );
+    _dummy.rotation.set(Math.random(), Math.random(), Math.random());
+    const s = 0.75 + Math.random() * 1.9;
+    _dummy.scale.set(s * 1.2, s * 0.8, s);
+    _dummy.updateMatrix();
+    marsRocks.setMatrixAt(i, _dummy.matrix);
+  }
+  marsRocks.instanceMatrix.needsUpdate = true;
+  marsRocks.computeBoundingSphere();
+  marsTerrainGroup.add(marsRocks);
+  marsTerrainGroup.visible = false;
+  group.add(marsTerrainGroup);
 
   const gantryPillarGeo = trackGeo(new THREE.BoxGeometry(0.45, 7.6, 0.45));
   const gantryBeamGeo = trackGeo(new THREE.BoxGeometry(18.6, 0.45, 0.55));
@@ -431,9 +501,13 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
   const buildings: BuildingItem[] = [];
   const towerMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: 0x161b24,
-      roughness: 0.72,
-      metalness: 0.28,
+      map: textures.buildingAlbedo,
+      emissiveMap: textures.buildingEmissive,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: 0.78,
+      roughness: 0.36,
+      metalness: 0.55,
+      envMapIntensity: 1.35,
     }),
   );
   const bldgStripGeo = trackGeo(new THREE.BoxGeometry(0.16, 1, 0.16));
@@ -522,9 +596,10 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
   const obstacles: ObstacleEntity[] = [];
   const barrierBodyMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: 0x262d3a,
-      roughness: 0.55,
-      metalness: 0.35,
+      map: textures.carbonTexture,
+      color: 0x9aa4b4,
+      roughness: 0.42,
+      metalness: 0.48,
     }),
   );
   const barrierTopMat = trackMat(
@@ -587,6 +662,96 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
     }),
   );
 
+  const rampFrameMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: textures.carbonTexture,
+      color: 0x253042,
+      roughness: 0.38,
+      metalness: 0.65,
+      envMapIntensity: 1.3,
+    }),
+  );
+  const rampDeckMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: textures.rampChevron,
+      emissiveMap: textures.rampChevron,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: 0.88,
+      roughness: 0.28,
+      metalness: 0.45,
+    }),
+  );
+
+  // Energy Orb / Fuel Cell Materials & Geometries
+  const orbCoreMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xfbbf24,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 2.2,
+      roughness: 0.18,
+      metalness: 0.65,
+    }),
+  );
+  const orbRingMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x67e8f9,
+      emissive: 0x22d3ee,
+      emissiveIntensity: 1.8,
+      roughness: 0.25,
+    }),
+  );
+  const orbCoreGeo = trackGeo(new THREE.OctahedronGeometry(0.42, 0));
+  const orbRingGeo = trackGeo(new THREE.TorusGeometry(0.62, 0.055, 8, 22));
+
+  // Falling Meteor / Space Debris Materials & Geometries
+  const meteorRockMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x291815,
+      emissive: 0xea580c,
+      emissiveIntensity: 1.15,
+      roughness: 0.85,
+      metalness: 0.15,
+    }),
+  );
+  const meteorTargetMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.72,
+      side: THREE.DoubleSide,
+    }),
+  );
+  const meteorRockGeo = trackGeo(new THREE.DodecahedronGeometry(1.05, 0));
+  const meteorCrustGeo = trackGeo(new THREE.OctahedronGeometry(0.68, 0));
+  const meteorTargetGeo = trackGeo(new THREE.RingGeometry(0.95, 1.35, 24));
+  meteorTargetGeo.rotateX(-Math.PI / 2);
+
+  // Stage 5 Speed Gate & Mars Colony Finish Arch Geometries
+  const gatePillarGeo = trackGeo(new THREE.BoxGeometry(0.24, 3.2, 0.34));
+  const gateTopGeo = trackGeo(new THREE.BoxGeometry(3.55, 0.28, 0.38));
+  const gateBeamMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.28,
+      side: THREE.DoubleSide,
+    }),
+  );
+  const gatePlaneGeo = trackGeo(new THREE.PlaneGeometry(3.05, 2.95));
+
+  const finishPillarGeo = trackGeo(new THREE.BoxGeometry(0.75, 8.2, 0.9));
+  const finishBannerGeo = trackGeo(new THREE.BoxGeometry(17.8, 1.35, 1.0));
+  const finishStripGeo = trackGeo(new THREE.PlaneGeometry(16.2, 1.6));
+  finishStripGeo.rotateX(-Math.PI / 2);
+  const finishMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: textures.hazardStripe,
+      emissive: 0x22d3ee,
+      emissiveIntensity: 0.9,
+      roughness: 0.3,
+    }),
+  );
+
   const bBaseGeo = trackGeo(new THREE.BoxGeometry(3.0, 0.92, 1.05));
   const bCapGeo = trackGeo(new THREE.BoxGeometry(3.04, 0.14, 1.09));
   const bStripesGeo = trackGeo(new THREE.BoxGeometry(2.8, 0.45, 1.08));
@@ -609,6 +774,40 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
 
   const padGeo = trackGeo(new THREE.BoxGeometry(2.7, 0.06, 5.4));
   const padFrameGeo = trackGeo(new THREE.BoxGeometry(2.96, 0.04, 5.66));
+
+  // Beveled Launch Ramp Geometries (low entry at +Z, 1.85m launch lip at -Z)
+  const RAMP_LEN = 10.6;
+  const RAMP_H = 1.85;
+  const RAMP_W = 3.24;
+  const RAMP_SLOPE_LEN = Math.hypot(RAMP_LEN, RAMP_H);
+  const RAMP_SLOPE_ANGLE = Math.atan2(RAMP_H, RAMP_LEN);
+
+  const rampWedgeShape = new THREE.Shape();
+  rampWedgeShape.moveTo(-RAMP_LEN * 0.5, 0);
+  rampWedgeShape.lineTo(RAMP_LEN * 0.5, 0);
+  rampWedgeShape.lineTo(RAMP_LEN * 0.5, RAMP_H);
+  rampWedgeShape.lineTo(-RAMP_LEN * 0.5, 0);
+
+  const rampWedgeGeo = trackGeo(
+    new THREE.ExtrudeGeometry(rampWedgeShape, {
+      depth: RAMP_W - 0.12,
+      bevelEnabled: true,
+      bevelThickness: 0.05,
+      bevelSize: 0.04,
+      bevelSegments: 2,
+    }),
+  );
+  rampWedgeGeo.translate(0, 0, -(RAMP_W - 0.12) * 0.5);
+  rampWedgeGeo.rotateY(Math.PI / 2);
+
+  const rampSurfaceGeo = trackGeo(new THREE.PlaneGeometry(RAMP_W - 0.18, RAMP_SLOPE_LEN));
+  rampSurfaceGeo.rotateX(-Math.PI / 2 + RAMP_SLOPE_ANGLE);
+
+  const rampSideRailGeo = trackGeo(new THREE.BoxGeometry(0.1, 0.14, RAMP_SLOPE_LEN));
+  rampSideRailGeo.rotateX(RAMP_SLOPE_ANGLE);
+
+  const rampLipGlowGeo = trackGeo(new THREE.BoxGeometry(RAMP_W + 0.04, 0.12, 0.18));
+  const rampStrutGeo = trackGeo(new THREE.BoxGeometry(0.24, RAMP_H - 0.15, 0.28));
 
   function addTrafficWheels(g: THREE.Group, halfW: number, axleZ: number) {
     for (const sx of [-halfW, halfW]) {
@@ -690,6 +889,96 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
       g.add(tail);
 
       addTrafficWheels(g, 1.1, 2.2);
+    } else if (kind === 'ramp') {
+      const wedge = new THREE.Mesh(rampWedgeGeo, rampFrameMat);
+      wedge.castShadow = true;
+      wedge.receiveShadow = true;
+      g.add(wedge);
+
+      const deck = new THREE.Mesh(rampSurfaceGeo, rampDeckMat);
+      deck.position.set(0, RAMP_H * 0.5 + 0.04, 0);
+      deck.receiveShadow = true;
+      g.add(deck);
+
+      const railL = new THREE.Mesh(rampSideRailGeo, cyanGlowMat);
+      railL.position.set(-RAMP_W * 0.5 + 0.04, RAMP_H * 0.5 + 0.08, 0);
+      g.add(railL);
+
+      const railR = new THREE.Mesh(rampSideRailGeo, amberGlowMat);
+      railR.position.set(RAMP_W * 0.5 - 0.04, RAMP_H * 0.5 + 0.08, 0);
+      g.add(railR);
+
+      const lipBar = new THREE.Mesh(rampLipGlowGeo, cyanGlowMat);
+      lipBar.position.set(0, RAMP_H + 0.02, -RAMP_LEN * 0.5);
+      g.add(lipBar);
+
+      for (const sx of [-1.42, 1.42]) {
+        const strut = new THREE.Mesh(rampStrutGeo, curbMat);
+        strut.position.set(sx, (RAMP_H - 0.15) * 0.5, -RAMP_LEN * 0.5 + 0.32);
+        g.add(strut);
+      }
+    } else if (kind === 'orb') {
+      const spinGroup = new THREE.Group();
+      spinGroup.position.y = 0.78;
+      const core = new THREE.Mesh(orbCoreGeo, orbCoreMat);
+      spinGroup.add(core);
+      const ring = new THREE.Mesh(orbRingGeo, orbRingMat);
+      ring.rotation.x = Math.PI / 3;
+      spinGroup.add(ring);
+      g.add(spinGroup);
+    } else if (kind === 'meteor') {
+      const targetRing = new THREE.Mesh(meteorTargetGeo, meteorTargetMat);
+      targetRing.position.y = 0.05;
+      g.add(targetRing);
+
+      const rockGroup = new THREE.Group();
+      rockGroup.position.y = 14;
+      const mainRock = new THREE.Mesh(meteorRockGeo, meteorRockMat);
+      mainRock.castShadow = true;
+      rockGroup.add(mainRock);
+      const crust1 = new THREE.Mesh(meteorCrustGeo, lavaRimMat);
+      crust1.position.set(0.42, -0.32, 0.28);
+      rockGroup.add(crust1);
+      const crust2 = new THREE.Mesh(meteorCrustGeo, meteorRockMat);
+      crust2.position.set(-0.48, 0.38, -0.2);
+      rockGroup.add(crust2);
+      g.add(rockGroup);
+    } else if (kind === 'gate') {
+      for (const sx of [-1.62, 1.62]) {
+        const p = new THREE.Mesh(gatePillarGeo, gantrySteelMat);
+        p.position.set(sx, 1.6, 0);
+        g.add(p);
+        const strip = new THREE.Mesh(
+          trackGeo(new THREE.BoxGeometry(0.1, 3.0, 0.38)),
+          cyanGlowMat,
+        );
+        strip.position.set(sx * 0.94, 1.6, 0);
+        g.add(strip);
+      }
+      const top = new THREE.Mesh(gateTopGeo, amberGlowMat);
+      top.position.set(0, 3.2, 0);
+      g.add(top);
+      const field = new THREE.Mesh(gatePlaneGeo, gateBeamMat);
+      field.position.set(0, 1.55, 0);
+      g.add(field);
+    } else if (kind === 'finishArch') {
+      for (const sx of [-8.4, 8.4]) {
+        const p = new THREE.Mesh(finishPillarGeo, gantrySteelMat);
+        p.position.set(sx, 4.1, 0);
+        g.add(p);
+        const beacon = new THREE.Mesh(
+          trackGeo(new THREE.SphereGeometry(0.45, 10, 10)),
+          amberGlowMat,
+        );
+        beacon.position.set(sx, 8.4, 0);
+        g.add(beacon);
+      }
+      const banner = new THREE.Mesh(finishBannerGeo, finishMat);
+      banner.position.set(0, 7.6, 0);
+      g.add(banner);
+      const strip = new THREE.Mesh(finishStripGeo, finishMat);
+      strip.position.set(0, 0.04, 0);
+      g.add(strip);
     } else {
       const frame = new THREE.Mesh(padFrameGeo, curbMat);
       frame.position.y = 0.02;
@@ -706,10 +995,15 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
 
   const poolKinds: ObstacleEntity['kind'][] = [
     ...Array<ObstacleEntity['kind']>(10).fill('barrier'),
-    ...Array<ObstacleEntity['kind']>(12).fill('sedan'),
-    ...Array<ObstacleEntity['kind']>(8).fill('suv'),
+    ...Array<ObstacleEntity['kind']>(13).fill('sedan'),
+    ...Array<ObstacleEntity['kind']>(9).fill('suv'),
     ...Array<ObstacleEntity['kind']>(5).fill('truck'),
-    ...Array<ObstacleEntity['kind']>(7).fill('pad'),
+    ...Array<ObstacleEntity['kind']>(8).fill('pad'),
+    ...Array<ObstacleEntity['kind']>(6).fill('ramp'),
+    ...Array<ObstacleEntity['kind']>(18).fill('orb'),
+    ...Array<ObstacleEntity['kind']>(8).fill('meteor'),
+    ...Array<ObstacleEntity['kind']>(6).fill('gate'),
+    'finishArch',
   ];
 
   poolKinds.forEach((kind, idx) => {
@@ -723,7 +1017,17 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
             ? { width: 2.08, height: 1.62, length: 4.5 }
             : kind === 'truck'
               ? { width: 2.26, height: 2.22, length: 6.4 }
-              : { width: 2.9, height: 0.2, length: 5.5 };
+              : kind === 'ramp'
+                ? { width: 3.3, height: RAMP_H, length: RAMP_LEN }
+                : kind === 'orb'
+                  ? { width: 1.35, height: 1.5, length: 1.35 }
+                  : kind === 'meteor'
+                    ? { width: 2.1, height: 2.0, length: 2.1 }
+                    : kind === 'gate'
+                      ? { width: 3.3, height: 3.2, length: 1.4 }
+                      : kind === 'finishArch'
+                        ? { width: 16.4, height: 8.2, length: 2.2 }
+                        : { width: 2.9, height: 0.2, length: 5.5 };
 
     const speed =
       kind === 'sedan'
@@ -745,6 +1049,7 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
       active: false,
       resolved: false,
       nearMissAwarded: false,
+      overtaken: false,
     });
   });
 
@@ -823,6 +1128,25 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
   let lastWasCollapsed = false;
   let particleCursor = 0;
   let particleEmitAccum = 0;
+  let activePlayMode: PlayMode = 'endless';
+  let activeCampaignStage: CampaignStageId = 1;
+  let finishArchSpawned = false;
+
+  const setStageConfig = (playMode: PlayMode, campaignStage: CampaignStageId) => {
+    activePlayMode = playMode;
+    activeCampaignStage = campaignStage;
+    const isMars = playMode === 'campaign' && campaignStage === 5;
+    const isMeteor = playMode === 'campaign' && campaignStage === 2;
+
+    marsTerrainGroup.visible = isMars;
+    roadMat.color.setHex(isMars ? 0xb4533c : 0xffffff);
+    curbMat.color.setHex(isMars ? 0x451a13 : 0x151a24);
+    towerMat.color.setHex(isMars ? 0x7c2d12 : 0xffffff);
+    haloRingMat.color.setHex(isMars ? 0xf97316 : 0x0ea5e9);
+
+    orbCoreMat.color.setHex(isMeteor ? 0x34d399 : 0xfbbf24);
+    orbCoreMat.emissive.setHex(isMeteor ? 0x10b981 : 0xf59e0b);
+  };
 
   const applySegmentCollapseVisuals = (seg: RoadSegment, side: CollapseSide) => {
     seg.collapseSide = side;
@@ -866,13 +1190,60 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
       side === 'right' && segments[prevIdx].collapseSide !== 'right';
     seg.leftWarnBar.visible = false;
     seg.rightWarnBar.visible = false;
+    // If this segment collapses on one side, place a SpaceX Launch Ramp on the preceding intact deck so player can launch over the lava!
+    if (side !== 'none' && segments[prevIdx].collapseSide === 'none') {
+      const ramp = obstacles.find((o) => !o.active && o.kind === 'ramp');
+      if (ramp) {
+        const targetLane = side === 'left' ? LANE_X[0] : LANE_X[3];
+        ramp.active = true;
+        ramp.resolved = false;
+        ramp.nearMissAwarded = false;
+        ramp.x = targetLane;
+        ramp.z = segments[prevIdx].zCenter - SEGMENT_LENGTH * 0.5 + RAMP_LEN * 0.5 + 1.2;
+        ramp.mesh.position.set(ramp.x, 0, ramp.z);
+        ramp.mesh.visible = true;
+      }
+    }
+  };
+
+  const spawnOrbTrail = (laneX: number, startZ: number, count: number) => {
+    for (let i = 0; i < count; i++) {
+      const orb = obstacles.find((o) => !o.active && o.kind === 'orb');
+      if (!orb) break;
+      orb.active = true;
+      orb.resolved = false;
+      orb.nearMissAwarded = false;
+      orb.overtaken = false;
+      orb.x = laneX;
+      orb.z = startZ - i * 8.5;
+      orb.mesh.position.set(orb.x, 0, orb.z);
+      orb.mesh.visible = true;
+    }
+  };
+
+  const spawnEntity = (
+    kind: ObstacleEntity['kind'],
+    laneX: number,
+    z: number,
+  ): ObstacleEntity | undefined => {
+    const obs = obstacles.find((o) => !o.active && o.kind === kind);
+    if (!obs) return undefined;
+    obs.active = true;
+    obs.resolved = false;
+    obs.nearMissAwarded = false;
+    obs.overtaken = false;
+    obs.x = laneX;
+    obs.z = z;
+    obs.mesh.position.set(obs.x, 0, obs.z);
+    obs.mesh.visible = true;
+    return obs;
   };
 
   const spawnObstacleWave = (spawnZ: number, distanceM: number) => {
     // Pick only lanes that are solid ground (never float obstacles/traffic over molten lava!)
     const solidLanes = LANE_X.filter(
       (lx) =>
-        getGroundStateAt(lx, spawnZ) === 'solid' &&
+        getGroundStateAt(lx, spawnZ + 6) === 'solid' &&
         getGroundStateAt(lx, spawnZ - 10) === 'solid',
     );
     if (solidLanes.length === 0) return;
@@ -881,37 +1252,87 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
     const roll = Math.random();
     const lanes = [...solidLanes].sort(() => Math.random() - 0.5);
 
-    if (roll < 0.24) {
+    // Stage 2: Meteor Rush (falling space debris + plentiful Fuel Cell trails)
+    if (activePlayMode === 'campaign' && activeCampaignStage === 2) {
+      const meteorCount = lanes.length >= 3 && Math.random() < 0.6 ? 2 : 1;
+      for (let i = 0; i < meteorCount; i++) {
+        spawnEntity('meteor', lanes[i], spawnZ - i * 8);
+      }
+      const fuelLane = lanes[lanes.length - 1];
+      spawnOrbTrail(fuelLane, spawnZ - 2, 3);
+      if (Math.random() < 0.28 && lanes.length >= 2) {
+        spawnEntity('ramp', lanes[1], spawnZ - 14);
+      }
+      return;
+    }
+
+    // Stage 3: Thruster Overdrive (heavy brisk traffic + frequent boost pads)
+    if (activePlayMode === 'campaign' && activeCampaignStage === 3) {
+      const carSlots = Math.min(lanes.length - 1, 3);
+      for (let i = 0; i < Math.max(2, carSlots); i++) {
+        const wantKind: ObstacleEntity['kind'] =
+          Math.random() < 0.25 ? 'truck' : Math.random() < 0.55 ? 'suv' : 'sedan';
+        spawnEntity(wantKind, lanes[i], spawnZ - i * 9);
+      }
+      if (lanes.length >= 2) {
+        spawnEntity('pad', lanes[lanes.length - 1], spawnZ + 4);
+      }
+      if (Math.random() < 0.45) {
+        spawnOrbTrail(lanes[lanes.length - 1], spawnZ - 10, 2);
+      }
+      return;
+    }
+
+    // Stage 5: Mars Colony Arrival (Speed Gates + Falling Meteors + Traffic)
+    if (activePlayMode === 'campaign' && activeCampaignStage === 5) {
+      if (distanceM > 2240) return; // Clear runway into Mars Colony Finish Arch!
+      spawnEntity('gate', lanes[0], spawnZ);
+      if (lanes.length >= 2) {
+        if (Math.random() < 0.55) {
+          spawnEntity('meteor', lanes[1], spawnZ - 10);
+        } else {
+          spawnEntity('suv', lanes[1], spawnZ - 12);
+        }
+      }
+      if (lanes.length >= 3 && Math.random() < 0.5) {
+        spawnEntity(Math.random() < 0.35 ? 'ramp' : 'sedan', lanes[2], spawnZ - 16);
+      }
+      if (Math.random() < 0.65) {
+        spawnOrbTrail(lanes[0], spawnZ - 6, 2);
+      }
+      return;
+    }
+
+    // Stage 4 dense traffic boost
+    const stage4Bonus =
+      activePlayMode === 'campaign' && activeCampaignStage === 4 ? 0.3 : 0;
+
+    if (roll < 0.22) {
+      spawnEntity('ramp', lanes[0], spawnZ);
+      if (lanes.length >= 2 && Math.random() < 0.65) {
+        spawnEntity('sedan', lanes[1], spawnZ - 12);
+      }
+      if (Math.random() < 0.7) {
+        spawnOrbTrail(lanes[0], spawnZ - 14, 3);
+      }
+    } else if (roll < 0.4) {
       const maxCount = Math.min(lanes.length, Math.random() < 0.45 + difficulty * 0.3 ? 2 : 1);
       for (let i = 0; i < maxCount; i++) {
-        const obs = obstacles.find((o) => !o.active && o.kind === 'barrier');
-        if (obs) {
-          obs.active = true;
-          obs.resolved = false;
-          obs.nearMissAwarded = false;
-          obs.x = lanes[i];
-          obs.z = spawnZ;
-          obs.mesh.position.set(obs.x, 0, obs.z);
-          obs.mesh.visible = true;
-        }
+        spawnEntity('barrier', lanes[i], spawnZ);
       }
       if (lanes.length >= 3 && Math.random() < 0.55) {
-        const pad = obstacles.find((o) => !o.active && o.kind === 'pad');
-        if (pad) {
-          pad.active = true;
-          pad.resolved = false;
-          pad.nearMissAwarded = false;
-          pad.x = lanes[2];
-          pad.z = spawnZ - 5;
-          pad.mesh.position.set(pad.x, 0, pad.z);
-          pad.mesh.visible = true;
-        }
+        spawnEntity('pad', lanes[2], spawnZ - 5);
       }
-    } else if (roll < 0.86) {
-      // Leave at least 1 solid lane open when possible
+      if (lanes.length >= 2 && Math.random() < 0.6) {
+        spawnOrbTrail(lanes[lanes.length - 1], spawnZ - 4, 2);
+      }
+    } else if (roll < 0.88) {
       const maxCars = Math.max(
         1,
-        Math.min(lanes.length - (lanes.length > 1 ? 1 : 0), Math.random() < 0.4 + difficulty * 0.35 ? 3 : 2),
+        Math.min(
+          lanes.length - (lanes.length > 1 ? 1 : 0),
+          Math.random() < 0.4 + difficulty * 0.35 + stage4Bonus ? 3 : 2,
+        ),
       );
       for (let i = 0; i < maxCars; i++) {
         const typeRoll = Math.random();
@@ -924,40 +1345,28 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
           obs.active = true;
           obs.resolved = false;
           obs.nearMissAwarded = false;
+          obs.overtaken = false;
           obs.x = lanes[i];
           obs.z = spawnZ - i * (9 + Math.random() * 8);
           obs.mesh.position.set(obs.x, 0, obs.z);
           obs.mesh.visible = true;
         }
       }
+      if (Math.random() < 0.55) {
+        spawnOrbTrail(lanes[lanes.length - 1], spawnZ - 4, 3);
+      }
     } else {
-      const pad = obstacles.find((o) => !o.active && o.kind === 'pad');
-      if (pad) {
-        pad.active = true;
-        pad.resolved = false;
-        pad.nearMissAwarded = false;
-        pad.x = lanes[0];
-        pad.z = spawnZ;
-        pad.mesh.position.set(pad.x, 0, pad.z);
-        pad.mesh.visible = true;
-      }
+      spawnEntity('pad', lanes[0], spawnZ);
       if (lanes.length >= 2) {
-        const car = obstacles.find((o) => !o.active && o.kind === 'sedan');
-        if (car) {
-          car.active = true;
-          car.resolved = false;
-          car.nearMissAwarded = false;
-          car.x = lanes[1];
-          car.z = spawnZ - 12;
-          car.mesh.position.set(car.x, 0, car.z);
-          car.mesh.visible = true;
-        }
+        spawnEntity('sedan', lanes[1], spawnZ - 12);
       }
+      spawnOrbTrail(lanes[0], spawnZ - 8, 3);
     }
   };
 
   const resetSegmentsLayout = () => {
     lastWasCollapsed = false;
+    finishArchSpawned = false;
     for (let i = 0; i < SEGMENT_COUNT; i++) {
       const seg = segments[i];
       seg.zCenter = 48 - i * SEGMENT_LENGTH;
@@ -971,6 +1380,7 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
       o.active = false;
       o.resolved = false;
       o.nearMissAwarded = false;
+      o.overtaken = false;
       o.mesh.visible = false;
       o.z = -500;
     });
@@ -978,6 +1388,7 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
   };
 
   const resetForShowroom = () => {
+    setStageConfig('endless', 1);
     resetSegmentsLayout();
     const lobbyTraffic: Array<{ kind: ObstacleEntity['kind']; lane: number; z: number }> = [
       { kind: 'sedan', lane: 0, z: -72 },
@@ -989,6 +1400,7 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
       if (obs) {
         obs.active = true;
         obs.resolved = false;
+        obs.overtaken = false;
         obs.x = LANE_X[item.lane];
         obs.z = item.z;
         obs.mesh.position.set(obs.x, 0, obs.z);
@@ -999,15 +1411,28 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
 
   const resetForPlay = () => {
     resetSegmentsLayout();
-    // Seed an early showcase broken-lava side section at z = -176 (index 7) so player sees it right away too!
+    // Seed an early showcase broken-lava side section at z = -176 (index 7) with a launch ramp right ahead of it!
     const earlyLavaSeg = segments[7];
     if (earlyLavaSeg) {
       applySegmentCollapseVisuals(earlyLavaSeg, 'left');
       segments[6].leftWarnBar.visible = true;
     }
 
-    spawnObstacleWave(-90, 60);
-    spawnObstacleWave(-140, 120);
+    spawnEntity('ramp', LANE_X[1], -105);
+    spawnEntity('ramp', LANE_X[0], -152);
+    spawnOrbTrail(LANE_X[2], -65, 3);
+
+    if (activePlayMode === 'campaign' && activeCampaignStage === 2) {
+      spawnOrbTrail(LANE_X[1], -90, 4);
+      spawnEntity('meteor', LANE_X[2], -130);
+      spawnOrbTrail(LANE_X[3], -185, 4);
+      spawnEntity('meteor', LANE_X[0], -220);
+    } else if (activePlayMode === 'campaign' && activeCampaignStage === 5) {
+      spawnEntity('gate', LANE_X[2], -95);
+      spawnEntity('gate', LANE_X[1], -215);
+    }
+
+    spawnObstacleWave(-75, 50);
     spawnObstacleWave(-225, 200);
     spawnObstacleWave(-295, 270);
   };
@@ -1060,6 +1485,7 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
     const dz = cruiseSpeedMps * dt;
     scrollSegmentsAndCity(dz, 0, false);
     textures.lavaTexture.offset.y = (textures.lavaTexture.offset.y + dt * 0.18) % 1;
+    textures.rampChevron.offset.y = (textures.rampChevron.offset.y - dt * 1.4) % 1;
 
     for (let i = 0; i < obstacles.length; i++) {
       const obs = obstacles[i];
@@ -1086,11 +1512,27 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
     const dz = playerSpeedMps * dt;
     scrollSegmentsAndCity(dz, distanceM, true);
     textures.lavaTexture.offset.y = (textures.lavaTexture.offset.y + dt * 0.35) % 1;
+    textures.rampChevron.offset.y = (textures.rampChevron.offset.y - dt * 1.8) % 1;
+
+    // Stage 5: Spawn Mars Colony Arrival Finish Line Arch at exact 2,500m target distance
+    if (
+      activePlayMode === 'campaign' &&
+      activeCampaignStage === 5 &&
+      !finishArchSpawned &&
+      distanceM >= 2200
+    ) {
+      finishArchSpawned = true;
+      spawnEntity('finishArch', 0, -(2500 - distanceM));
+    }
 
     if (distanceM >= nextSpawnDistanceM) {
       spawnObstacleWave(-330, distanceM);
-      const spacing = Math.max(40, 64 - Math.min(22, distanceM / 110));
-      nextSpawnDistanceM = distanceM + spacing + Math.random() * 18;
+      const isStage2Or3 =
+        activePlayMode === 'campaign' &&
+        (activeCampaignStage === 2 || activeCampaignStage === 3);
+      const baseSpacing = isStage2Or3 ? 38 : 64;
+      const spacing = Math.max(32, baseSpacing - Math.min(22, distanceM / 110));
+      nextSpawnDistanceM = distanceM + spacing + Math.random() * 14;
     }
 
     for (let i = 0; i < obstacles.length; i++) {
@@ -1100,10 +1542,21 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
       obs.z += relSpeed * dt;
       obs.mesh.position.z = obs.z;
 
+      if (obs.kind === 'orb' && obs.mesh.children[0]) {
+        obs.mesh.children[0].rotation.y += dt * 3.4;
+        obs.mesh.children[0].position.y = 0.78 + Math.sin(obs.z * 0.15) * 0.14;
+      } else if (obs.kind === 'meteor' && obs.mesh.children[1]) {
+        const rockGroup = obs.mesh.children[1];
+        const fallProgress = Math.max(0, Math.min(1, (obs.z + 110) / 108));
+        rockGroup.position.y = THREE.MathUtils.lerp(24, 0.9, fallProgress);
+        rockGroup.rotation.x += dt * 2.8;
+        rockGroup.rotation.z += dt * 2.1;
+      }
+
       if (obs.z > 32) {
         obs.active = false;
         obs.mesh.visible = false;
-      } else if (getGroundStateAt(obs.x, obs.z) === 'lava') {
+      } else if (obs.kind !== 'finishArch' && getGroundStateAt(obs.x, obs.z) === 'lava') {
         obs.active = false;
         obs.mesh.visible = false;
       }
@@ -1236,6 +1689,9 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
     roadMat.roughness = THREE.MathUtils.damp(roadMat.roughness, targetRoughness, 3.2, dt);
     roadMat.metalness = THREE.MathUtils.damp(roadMat.metalness, targetMetalness, 3.2, dt);
     roadMat.envMapIntensity = THREE.MathUtils.damp(roadMat.envMapIntensity, targetEnv, 3.2, dt);
+    const targetNorm = weather === 'rainy' ? 0.24 : 0.55;
+    roadMat.normalScale.x = THREE.MathUtils.damp(roadMat.normalScale.x, targetNorm, 3.2, dt);
+    roadMat.normalScale.y = roadMat.normalScale.x;
 
     const targetRainAlpha = weather === 'rainy' ? 0.42 : 0;
     rainOpacity = THREE.MathUtils.damp(rainOpacity, targetRainAlpha, 4.5, dt);
@@ -1337,6 +1793,7 @@ export function createWorldManager(textures: ProceduralTextures): WorldManager {
     group,
     segments,
     obstacles,
+    setStageConfig,
     resetForShowroom,
     resetForPlay,
     updateLobbyCruise,

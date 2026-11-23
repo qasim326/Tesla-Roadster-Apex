@@ -194,7 +194,78 @@ export const THRUSTER_THEMES: Record<
   },
 };
 
-export type GameMode = 'title' | 'playing' | 'paused' | 'gameover';
+export type GameMode = 'title' | 'playing' | 'paused' | 'gameover' | 'stage_complete';
+export type PlayMode = 'endless' | 'campaign';
+export type CampaignStageId = 1 | 2 | 3 | 4 | 5;
+export type StageTheme = 'earth' | 'orbit' | 'mars';
+
+export type MissionTypeId =
+  | 'thruster_burn'
+  | 'close_call'
+  | 'starman_speed'
+  | 'orbital_collector'
+  | 'zero_damage_sprint'
+  | 'lane_weaver'
+  | 'apex_score'
+  | 'rival_overtake';
+
+export interface MissionDefinition {
+  id: MissionTypeId;
+  title: string;
+  description: string;
+  unit: string;
+  target: number;
+  perRun: boolean;
+  rewardPts: number;
+  rewardCoins: number;
+}
+
+export interface ActiveMission {
+  id: MissionTypeId;
+  progress: number;
+  completed: boolean;
+  claimed: boolean;
+}
+
+export interface MissionBanner {
+  id: number;
+  missionId: MissionTypeId;
+  title: string;
+  rewardPts: number;
+  rewardCoins: number;
+}
+
+export interface MissionsProgressState {
+  activeMissions: ActiveMission[];
+  missionsCompleted: number;
+  coins: number;
+  unlockedStage: CampaignStageId;
+  completedStages: CampaignStageId[];
+}
+
+export interface PilotRankInfo {
+  title: string;
+  level: number;
+  nextTitle: string | null;
+  currentMin: number;
+  nextMin: number | null;
+}
+
+export interface CampaignStageMeta {
+  id: CampaignStageId;
+  name: string;
+  subtitle: string;
+  objectiveLabel: string;
+  theme: StageTheme;
+  goalKind: 'distance_timed' | 'fuel_cells' | 'overtakes' | 'distance' | 'mars_boss';
+  targetValue: number;
+  timeLimitSec: number | null;
+  difficulty: number;
+  rewardPts: number;
+  rewardCoins: number;
+  weather: WeatherCondition;
+}
+
 export type StudioTab = 'model' | 'paint' | 'livery' | 'wheels' | 'aero' | 'stance' | 'thrusters';
 
 export interface HudCallout {
@@ -207,6 +278,8 @@ export interface HudState {
   score: number;
   distanceKm: number;
   speedKmh: number;
+  elapsedSeconds: number;
+  sprint1KmSec: number | null;
   coldGasPct: number;
   coldGasActive: boolean;
   surgeActive: boolean;
@@ -217,7 +290,19 @@ export interface HudState {
   topSpeedKmh: number;
   weather: WeatherCondition;
   callout: HudCallout | null;
-  gameOverReason: 'wrecked' | 'viaduct_fall' | 'lava_fall' | null;
+  gameOverReason: 'wrecked' | 'viaduct_fall' | 'lava_fall' | 'time_expired' | null;
+  playMode: PlayMode;
+  campaignStage: CampaignStageId;
+  stageProgress: number;
+  stageTarget: number;
+  stageTimeLeftSec: number | null;
+  orbsCollected: number;
+  nearMisses: number;
+  thrusterActivations: number;
+  laneSwitches: number;
+  boostOvertakes: number;
+  zeroDamageDistM: number;
+  zeroDamageTimeSec: number;
 }
 
 export interface BestRecord {
@@ -225,10 +310,29 @@ export interface BestRecord {
   bestKm: number;
 }
 
+export interface LeaderboardEntry {
+  id: string;
+  score: number;
+  distanceKm: number;
+  elapsedSeconds: number;
+  sprint1KmSec: number | null;
+  topSpeedKmh: number;
+  carModel: CarModelId;
+  weather: WeatherCondition;
+  createdAt: number;
+}
+
+export interface LeaderboardData {
+  topScores: LeaderboardEntry[];
+  fastestTimes: LeaderboardEntry[];
+}
+
 export const INITIAL_HUD_STATE: HudState = {
   score: 0,
   distanceKm: 0,
   speedKmh: 0,
+  elapsedSeconds: 0,
+  sprint1KmSec: null,
   coldGasPct: 100,
   coldGasActive: false,
   surgeActive: false,
@@ -240,4 +344,16 @@ export const INITIAL_HUD_STATE: HudState = {
   weather: 'clear',
   callout: null,
   gameOverReason: null,
+  playMode: 'endless',
+  campaignStage: 1,
+  stageProgress: 0,
+  stageTarget: 1000,
+  stageTimeLeftSec: null,
+  orbsCollected: 0,
+  nearMisses: 0,
+  thrusterActivations: 0,
+  laneSwitches: 0,
+  boostOvertakes: 0,
+  zeroDamageDistM: 0,
+  zeroDamageTimeSec: 0,
 };

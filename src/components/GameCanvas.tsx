@@ -10,11 +10,14 @@ import {
   ROAD_HALF_WIDTH,
   createWorldManager,
 } from '../three/worldManager';
+import { getStageMeta } from '../data/missionsAndCampaign';
 import {
+  CampaignStageId,
   CarSpec,
   GameMode,
   HudCallout,
   HudState,
+  PlayMode,
   StudioTab,
   WEATHER_CONFIGS,
   WeatherCondition,
@@ -32,14 +35,18 @@ export interface TouchControlsState {
 
 interface GameCanvasProps {
   mode: GameMode;
+  playMode: PlayMode;
+  campaignStage: CampaignStageId;
   carSpec: CarSpec;
   weather: WeatherCondition;
   studioOpen: boolean;
   studioTab: StudioTab;
   runNonce: number;
   touchRef: React.MutableRefObject<TouchControlsState>;
+  pendingMissionBonusRef: React.MutableRefObject<number>;
   onHudUpdate: (hud: HudState) => void;
   onGameOver: (finalHud: HudState) => void;
+  onStageComplete: (finalHud: HudState) => void;
   onContextLostChange?: (lost: boolean) => void;
 }
 
@@ -48,28 +55,36 @@ const _camTarget = new THREE.Vector3();
 const _targetPos = new THREE.Vector3();
 const _targetLook = new THREE.Vector3();
 const _targetFogColor = new THREE.Color();
+const _targetKeyColor = new THREE.Color();
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({
   mode,
+  playMode,
+  campaignStage,
   carSpec,
   weather,
   studioOpen,
   studioTab,
   runNonce,
   touchRef,
+  pendingMissionBonusRef,
   onHudUpdate,
   onGameOver,
+  onStageComplete,
   onContextLostChange,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const modeRef = useRef<GameMode>(mode);
+  const playModeRef = useRef<PlayMode>(playMode);
+  const campaignStageRef = useRef<CampaignStageId>(campaignStage);
   const specRef = useRef<CarSpec>(carSpec);
   const weatherRef = useRef<WeatherCondition>(weather);
   const studioOpenRef = useRef<boolean>(studioOpen);
   const studioTabRef = useRef<StudioTab>(studioTab);
   const onHudUpdateRef = useRef(onHudUpdate);
   const onGameOverRef = useRef(onGameOver);
+  const onStageCompleteRef = useRef(onStageComplete);
   const onContextLostRef = useRef(onContextLostChange);
 
   const rigApplySpecRef = useRef<((spec: CarSpec) => void) | null>(null);
@@ -82,6 +97,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       resetShowroomFnRef.current?.();
     }
   }, [mode]);
+
+  useEffect(() => {
+    playModeRef.current = playMode;
+  }, [playMode]);
+
+  useEffect(() => {
+    campaignStageRef.current = campaignStage;
+  }, [campaignStage]);
 
   useEffect(() => {
     specRef.current = carSpec;
@@ -103,8 +126,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   useEffect(() => {
     onHudUpdateRef.current = onHudUpdate;
     onGameOverRef.current = onGameOver;
+    onStageCompleteRef.current = onStageComplete;
     onContextLostRef.current = onContextLostChange;
-  }, [onHudUpdate, onGameOver, onContextLostChange]);
+  }, [onHudUpdate, onGameOver, onStageComplete, onContextLostChange]);
 
   useEffect(() => {
     if (runNonce > 0) {
@@ -185,20 +209,23 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x261d14, 0.95);
     scene.add(hemiLight);
 
-    const keyLight = new THREE.DirectionalLight(0xfff4e0, 2.35);
-    keyLight.position.set(-14, 22, -16);
+    const keyLight = new THREE.DirectionalLight(0xfff4e0, 2.4);
+    keyLight.position.set(-14, 24, -14);
     keyLight.castShadow = !isSoftwareGl;
-    keyLight.shadow.mapSize.width = 1024;
-    keyLight.shadow.mapSize.height = 1024;
+    keyLight.shadow.mapSize.width = isSoftwareGl ? 1024 : 2048;
+    keyLight.shadow.mapSize.height = isSoftwareGl ? 1024 : 2048;
     keyLight.shadow.camera.near = 1;
-    keyLight.shadow.camera.far = 70;
-    const d = 14;
+    keyLight.shadow.camera.far = 75;
+    const d = 16;
     keyLight.shadow.camera.left = -d;
     keyLight.shadow.camera.right = d;
     keyLight.shadow.camera.top = d;
     keyLight.shadow.camera.bottom = -d;
-    keyLight.shadow.bias = -0.0005;
+    keyLight.shadow.bias = -0.0004;
     keyLight.shadow.normalBias = 0.02;
+    if (!isSoftwareGl) {
+      keyLight.shadow.radius = 2.5;
+    }
     scene.add(keyLight);
 
     const rimLight = new THREE.DirectionalLight(0x22d3ee, 1.45);
@@ -247,6 +274,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       speedMps: 76, // ~274 km/h cruising baseline
       distanceM: 0,
       score: 0,
+      elapsedSeconds: 0,
+      sprint1KmSec: null as number | null,
       coldGasPct: 100,
       shields: 3,
       invulnTimer: 0,
@@ -267,7 +296,24 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       callout: null as HudCallout | null,
       calloutId: 0,
       calloutTimer: 0,
+      orbsCollected: 0,
+      nearMisses: 0,
+      thrusterActivations: 0,
+      laneSwitches: 0,
+      lastLaneIdx: 1,
+      boostOvertakes: 0,
+      zeroDamageDistM: 0,
+      zeroDamageTimeSec: 0,
+      wasSurgeBoost: false,
+      wasColdGasBoost: false,
       runEnded: false,
+    };
+
+    const getLaneIdx = (xVal: number): number => {
+      if (xVal < -3.4) return 0;
+      if (xVal < 0) return 1;
+      if (xVal < 3.4) return 2;
+      return 3;
     };
 
     const setCallout = (text: string, tone: HudCallout['tone']) => {
@@ -294,6 +340,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     };
 
     const initPlayRun = () => {
+      world.setStageConfig(playModeRef.current, campaignStageRef.current);
       world.resetForPlay();
       physics.x = 0;
       physics.vx = 0;
@@ -302,6 +349,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       physics.speedMps = 78; // ~280 km/h launch speed
       physics.distanceM = 0;
       physics.score = 0;
+      physics.elapsedSeconds = 0;
+      physics.sprint1KmSec = null;
       physics.coldGasPct = 100;
       physics.shields = 3;
       physics.invulnTimer = 0;
@@ -320,8 +369,19 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       physics.stuntRoll = 0;
       physics.callout = null;
       physics.calloutTimer = 0;
+      physics.orbsCollected = 0;
+      physics.nearMisses = 0;
+      physics.thrusterActivations = 0;
+      physics.laneSwitches = 0;
+      physics.lastLaneIdx = getLaneIdx(0);
+      physics.boostOvertakes = 0;
+      physics.zeroDamageDistM = 0;
+      physics.zeroDamageTimeSec = 0;
+      physics.wasSurgeBoost = false;
+      physics.wasColdGasBoost = false;
       physics.runEnded = false;
       queuedFlipKind = null;
+      pendingMissionBonusRef.current = 0;
 
       carRig.root.visible = true;
       carRig.root.position.set(0, 0, 0);
@@ -438,8 +498,80 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       frameId = window.setTimeout(poll, 5);
     }
 
+    const computeStageProgress = (stageId: CampaignStageId): { progress: number; target: number; timeLeft: number | null } => {
+      const meta = getStageMeta(stageId);
+      if (meta.goalKind === 'distance_timed') {
+        return {
+          progress: Math.floor(physics.distanceM),
+          target: meta.targetValue,
+          timeLeft: meta.timeLimitSec !== null ? Math.max(0, meta.timeLimitSec - physics.elapsedSeconds) : null,
+        };
+      }
+      if (meta.goalKind === 'fuel_cells') {
+        return { progress: physics.orbsCollected, target: meta.targetValue, timeLeft: null };
+      }
+      if (meta.goalKind === 'overtakes') {
+        return { progress: physics.boostOvertakes, target: meta.targetValue, timeLeft: null };
+      }
+      return {
+        progress: Math.floor(physics.distanceM),
+        target: meta.targetValue,
+        timeLeft: null,
+      };
+    };
+
+    const buildHudSnapshot = (
+      speedKmh: number,
+      coldGasActive: boolean,
+      surgeActive: boolean,
+      isAirborne: boolean,
+      gameOverReason: HudState['gameOverReason'],
+    ): HudState => {
+      const st = computeStageProgress(campaignStageRef.current);
+      return {
+        score: Math.floor(physics.score),
+        distanceKm: Number((physics.distanceM / 1000).toFixed(2)),
+        speedKmh,
+        elapsedSeconds: Number(physics.elapsedSeconds.toFixed(2)),
+        sprint1KmSec: physics.sprint1KmSec,
+        coldGasPct: Math.round(physics.coldGasPct),
+        coldGasActive,
+        surgeActive,
+        isAirborne,
+        shields:
+          gameOverReason === 'wrecked' || gameOverReason === 'lava_fall'
+            ? 0
+            : physics.shields,
+        maxShields: 3,
+        gapsCleared: physics.gapsCleared,
+        topSpeedKmh: physics.topSpeedKmh,
+        weather: weatherRef.current,
+        callout:
+          gameOverReason === 'wrecked'
+            ? { text: 'CHASSIS WRECKED', tone: 'red', id: physics.calloutId + 1 }
+            : gameOverReason === 'lava_fall'
+              ? { text: 'LAVA BREACH', tone: 'red', id: physics.calloutId + 1 }
+              : gameOverReason === 'time_expired'
+                ? { text: 'TIME EXPIRED', tone: 'red', id: physics.calloutId + 1 }
+                : physics.callout,
+        gameOverReason,
+        playMode: playModeRef.current,
+        campaignStage: campaignStageRef.current,
+        stageProgress: st.progress,
+        stageTarget: st.target,
+        stageTimeLeftSec: st.timeLeft,
+        orbsCollected: physics.orbsCollected,
+        nearMisses: physics.nearMisses,
+        thrusterActivations: physics.thrusterActivations,
+        laneSwitches: physics.laneSwitches,
+        boostOvertakes: physics.boostOvertakes,
+        zeroDamageDistM: Math.floor(physics.zeroDamageDistM),
+        zeroDamageTimeSec: Number(physics.zeroDamageTimeSec.toFixed(1)),
+      };
+    };
+
     const triggerGameOver = (
-      reason: 'wrecked' | 'viaduct_fall' | 'lava_fall',
+      reason: 'wrecked' | 'viaduct_fall' | 'lava_fall' | 'time_expired',
       speedKmh: number,
       isAirborne: boolean,
     ) => {
@@ -453,29 +585,27 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         surgeActive: false,
         isAirborne: false,
       });
-      const finalHud: HudState = {
-        score: Math.floor(physics.score),
-        distanceKm: Number((physics.distanceM / 1000).toFixed(2)),
-        speedKmh,
-        coldGasPct: Math.round(physics.coldGasPct),
-        coldGasActive: false,
-        surgeActive: false,
-        isAirborne,
-        shields: reason === 'wrecked' || reason === 'lava_fall' ? 0 : physics.shields,
-        maxShields: 3,
-        gapsCleared: physics.gapsCleared,
-        topSpeedKmh: physics.topSpeedKmh,
-        weather: weatherRef.current,
-        callout:
-          reason === 'wrecked'
-            ? { text: 'CHASSIS WRECKED', tone: 'red', id: physics.calloutId + 1 }
-            : reason === 'lava_fall'
-              ? { text: 'LAVA BREACH', tone: 'red', id: physics.calloutId + 1 }
-              : physics.callout,
-        gameOverReason: reason,
-      };
+      const finalHud = buildHudSnapshot(speedKmh, false, false, isAirborne, reason);
       onHudUpdateRef.current(finalHud);
       onGameOverRef.current(finalHud);
+    };
+
+    const triggerStageComplete = (speedKmh: number, isAirborne: boolean) => {
+      if (physics.runEnded) return;
+      physics.runEnded = true;
+      const meta = getStageMeta(campaignStageRef.current);
+      physics.score += meta.rewardPts;
+      soundEngine.playStageVictory();
+      soundEngine.updateContinuous({
+        playing: false,
+        speedKmh: 0,
+        coldGasActive: false,
+        surgeActive: false,
+        isAirborne: false,
+      });
+      const finalHud = buildHudSnapshot(speedKmh, false, false, isAirborne, null);
+      onHudUpdateRef.current(finalHud);
+      onStageCompleteRef.current(finalHud);
     };
 
     const tick = () => {
@@ -505,10 +635,21 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         }
       }
 
-      // Smooth Dynamic Weather Atmosphere (Fog, Visibility & Lighting)
-      _targetFogColor.setHex(weatherCfg.fogColorHex);
+      // Smooth Dynamic Weather & Mars Campaign Atmosphere
+      const isMarsTheme =
+        currentMode !== 'title' &&
+        playModeRef.current === 'campaign' &&
+        campaignStageRef.current === 5;
+      _targetFogColor.setHex(isMarsTheme ? 0x3b150e : weatherCfg.fogColorHex);
       fog.color.lerp(_targetFogColor, 1 - Math.exp(-3.0 * dt));
-      fog.density = THREE.MathUtils.damp(fog.density, weatherCfg.fogDensity, 3.0, dt);
+      fog.density = THREE.MathUtils.damp(
+        fog.density,
+        isMarsTheme ? 0.0062 : weatherCfg.fogDensity,
+        3.0,
+        dt,
+      );
+      _targetKeyColor.setHex(isMarsTheme ? 0xffb38a : 0xfff4e0);
+      keyLight.color.lerp(_targetKeyColor, 1 - Math.exp(-3.0 * dt));
 
       const targetHemi = activeWeather === 'rainy' ? 0.68 : activeWeather === 'foggy' ? 1.15 : 0.95;
       const targetKey = activeWeather === 'rainy' ? 1.65 : activeWeather === 'foggy' ? 1.05 : 2.35;
@@ -602,6 +743,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           weather: activeWeather,
         });
       } else if (currentMode === 'playing' && !physics.runEnded) {
+        if (pendingMissionBonusRef.current > 0) {
+          physics.score += pendingMissionBonusRef.current;
+          pendingMissionBonusRef.current = 0;
+        }
+
         const tControls = touchRef.current;
         const steerLeft = keys.left || tControls.left;
         const steerRight = keys.right || tControls.right;
@@ -624,6 +770,12 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         } else if (physics.x > maxRoadX) {
           physics.x = maxRoadX;
           physics.vx = Math.min(0, physics.vx);
+        }
+
+        const curLaneIdx = getLaneIdx(physics.x);
+        if (curLaneIdx !== physics.lastLaneIdx) {
+          physics.lastLaneIdx = curLaneIdx;
+          physics.laneSwitches += 1;
         }
 
         // 2. Throttle (W), Weather-Affected Braking (S) & Surge Boost (Shift) Speed Physics
@@ -662,19 +814,49 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         const speedKmh = Math.round(physics.speedMps * 3.6);
         if (speedKmh > physics.topSpeedKmh) physics.topSpeedKmh = speedKmh;
 
-        // 3. Hydraulic Jump & SpaceX Cold-Gas Thrusters (Spacebar)
+        // 3. Hydraulic Jump, Launch Ramps & SpaceX Cold-Gas Thrusters (Spacebar)
+        let rampSurfaceY = -10;
+        let onRamp = false;
+        for (let i = 0; i < world.obstacles.length; i++) {
+          const obs = world.obstacles[i];
+          if (!obs.active || obs.kind !== 'ramp') continue;
+          const dx = Math.abs(obs.x - physics.x);
+          if (dx < obs.width * 0.5 + CAR_HALF_WIDTH * 0.72) {
+            const t = (obs.z + obs.length * 0.5) / obs.length;
+            if (t >= -0.04 && t <= 1.04) {
+              const tc = Math.max(0, Math.min(1, t));
+              const sy = tc * obs.height;
+              if (physics.y <= sy + 0.45) {
+                rampSurfaceY = Math.max(rampSurfaceY, sy);
+                onRamp = true;
+                if (!obs.resolved && t >= 0.85) {
+                  obs.resolved = true;
+                  physics.vy = Math.max(physics.vy, 13.8 + physics.speedMps * 0.042);
+                  physics.speedMps = Math.min(148, physics.speedMps + 8);
+                  physics.coldGasPct = Math.min(100, physics.coldGasPct + 18);
+                  physics.score += 350;
+                  physics.suspensionVelY = 4.6;
+                  setCallout('+350 RAMP LAUNCH', 'cyan');
+                  soundEngine.playHydraulicJump();
+                }
+              }
+            }
+          }
+        }
+
         const overSolid = world.getGroundStateAt(physics.x, 0) === 'solid';
-        const grounded = physics.y <= 0.03 && overSolid;
+        const grounded = (physics.y <= 0.03 && overSolid) || onRamp;
 
         if (jumpJustPressed && grounded) {
-          physics.vy = 12.2;
-          physics.y = 0.08;
+          physics.vy = onRamp ? Math.max(physics.vy, 15.2) : 12.2;
+          physics.y = Math.max(physics.y, 0.08);
           physics.suspensionVelY = 4.0;
           soundEngine.playHydraulicJump();
         }
         jumpJustPressed = false;
 
-        const isAirborne = physics.y > 0.06 || !overSolid;
+        const floorY = onRamp ? rampSurfaceY : 0;
+        const isAirborne = physics.y > floorY + 0.12 || (!overSolid && !onRamp);
         let coldGasActive = false;
 
         // Spacebar activates SpaceX Cold-Gas Thrusters mid-air
@@ -687,6 +869,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           physics.vy -= 26.5 * dt;
         }
 
+        // Count discrete thruster boost activations (Surge or Cold-Gas engage)
+        if (wantSurge && !physics.wasSurgeBoost) {
+          physics.thrusterActivations += 1;
+        }
+        if (coldGasActive && !physics.wasColdGasBoost) {
+          physics.thrusterActivations += 1;
+        }
+        physics.wasSurgeBoost = wantSurge;
+        physics.wasColdGasBoost = coldGasActive;
+
         if (wantSurge && !coldGasActive && physics.surgePadTimer <= 0) {
           physics.coldGasPct = Math.max(0, physics.coldGasPct - 11 * dt);
         } else if (!coldGasActive && grounded) {
@@ -695,7 +887,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
         physics.y += physics.vy * dt;
 
-        if (overSolid && physics.y <= 0) {
+        if (onRamp && physics.y <= rampSurfaceY) {
+          physics.y = rampSurfaceY;
+          physics.vy = Math.max(physics.vy, physics.speedMps * (1.85 / 10.6));
+        } else if (overSolid && physics.y <= 0) {
           if (physics.wasAirborne && physics.vy < -3.5) {
             physics.suspensionVelY = -4.2;
             soundEngine.playLanding();
@@ -704,7 +899,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           physics.vy = 0;
         }
 
-        physics.wasAirborne = physics.y > 0.08;
+        physics.wasAirborne = isAirborne;
 
         // Check Lava Pit Dip on Collapsed Side (lose 1 life + recovery bounce unless 0 lives left)
         if (!overSolid && physics.y <= -0.85) {
@@ -712,6 +907,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             physics.shields -= 1;
             physics.invulnTimer = 1.65;
             physics.shake = 0.8;
+            physics.zeroDamageDistM = 0;
+            physics.zeroDamageTimeSec = 0;
             world.spawnLavaSplash(physics.x, -1.2, 0);
 
             if (physics.shields <= 0) {
@@ -743,13 +940,30 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             soundEngine.playBonusChime('gap');
           }
 
-          // 4. Advance Distance, Road Scroll & Obstacles
+          // 4. Advance Elapsed Time, Distance, Zero-Damage Telemetry & World
+          const prevDist = physics.distanceM;
+          const prevTime = physics.elapsedSeconds;
+          physics.elapsedSeconds += dt;
           physics.distanceM += physics.speedMps * dt;
+          physics.zeroDamageDistM += physics.speedMps * dt;
+          if (speedKmh >= 260) {
+            physics.zeroDamageTimeSec += dt;
+          }
+          if (physics.sprint1KmSec === null && physics.distanceM >= 1000) {
+            const frac =
+              physics.distanceM > prevDist
+                ? (1000 - prevDist) / (physics.distanceM - prevDist)
+                : 1;
+            const split = prevTime + frac * dt;
+            physics.sprint1KmSec = Number(split.toFixed(2));
+            setCallout(`1 KM · ${physics.sprint1KmSec.toFixed(2)}S`, 'cyan');
+            soundEngine.playBonusChime('gap');
+          }
           physics.score += physics.speedMps * dt * (wantSurge ? 1.85 : holdAccel ? 1.3 : 1.0);
 
           world.updateWorld(dt, physics.speedMps, physics.distanceM, true);
 
-          // 5. Obstacle Collisions / Vaults / Near-Miss / Boost Pads
+          // 5. Obstacle Collisions / Orbs / Gates / Mars Finish / Near-Miss / Overtakes
           if (physics.invulnTimer > 0) physics.invulnTimer -= dt;
           if (physics.calloutTimer > 0) {
             physics.calloutTimer -= dt;
@@ -758,7 +972,31 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
           for (let i = 0; i < world.obstacles.length; i++) {
             const obs = world.obstacles[i];
-            if (!obs.active || obs.resolved) continue;
+            if (!obs.active || obs.kind === 'ramp') continue;
+
+            // Stage 5 Finish Line Arch check
+            if (obs.kind === 'finishArch') {
+              if (!obs.resolved && obs.z >= -1.2) {
+                obs.resolved = true;
+                triggerStageComplete(speedKmh, isAirborne);
+                break;
+              }
+              continue;
+            }
+
+            // Overtake tracking while boosting
+            if (
+              !obs.overtaken &&
+              (obs.kind === 'sedan' || obs.kind === 'suv' || obs.kind === 'truck') &&
+              obs.z > 2.2
+            ) {
+              obs.overtaken = true;
+              if (wantSurge || coldGasActive || physics.speedMps >= 92) {
+                physics.boostOvertakes += 1;
+              }
+            }
+
+            if (obs.resolved) continue;
 
             const dz = Math.abs(obs.z);
             const dx = Math.abs(obs.x - physics.x);
@@ -766,7 +1004,31 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             const halfL = obs.length * 0.5 + 1.95;
 
             if (dz < halfL && dx < halfW) {
-              if (obs.kind === 'pad') {
+              if (obs.kind === 'orb') {
+                obs.resolved = true;
+                obs.active = false;
+                obs.mesh.visible = false;
+                physics.orbsCollected += 1;
+                physics.score += 50;
+                physics.coldGasPct = Math.min(100, physics.coldGasPct + 14);
+                soundEngine.playOrbPickup();
+                if (
+                  playModeRef.current === 'campaign' &&
+                  campaignStageRef.current === 2
+                ) {
+                  setCallout(
+                    `FUEL CELL ${physics.orbsCollected} / 30`,
+                    'cyan',
+                  );
+                }
+              } else if (obs.kind === 'gate') {
+                obs.resolved = true;
+                physics.surgePadTimer = 1.6;
+                physics.coldGasPct = Math.min(100, physics.coldGasPct + 25);
+                physics.score += 400;
+                setCallout('+400 SPEED GATE', 'cyan');
+                soundEngine.playBonusChime('pad');
+              } else if (obs.kind === 'pad') {
                 obs.resolved = true;
                 physics.coldGasPct = Math.min(100, physics.coldGasPct + 35);
                 physics.surgePadTimer = 1.45;
@@ -786,6 +1048,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
                 physics.invulnTimer = 1.35;
                 physics.speedMps = Math.max(52, physics.speedMps * 0.7);
                 physics.shake = 0.65;
+                physics.zeroDamageDistM = 0;
+                physics.zeroDamageTimeSec = 0;
                 world.spawnImpactSparks(physics.x, physics.y, 0);
 
                 if (physics.shields <= 0) {
@@ -805,9 +1069,37 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
               physics.speedMps > 85
             ) {
               obs.nearMissAwarded = true;
+              physics.nearMisses += 1;
               physics.score += 100;
               setCallout('+100 NEAR MISS', 'cyan');
               soundEngine.playBonusChime('vault');
+            }
+          }
+
+          // Campaign Mode Win & Timer Evaluation
+          if (!physics.runEnded && playModeRef.current === 'campaign') {
+            const meta = getStageMeta(campaignStageRef.current);
+            if (meta.goalKind === 'distance_timed') {
+              if (physics.distanceM >= meta.targetValue) {
+                triggerStageComplete(speedKmh, isAirborne);
+              } else if (
+                meta.timeLimitSec !== null &&
+                physics.elapsedSeconds >= meta.timeLimitSec
+              ) {
+                triggerGameOver('time_expired', speedKmh, isAirborne);
+              }
+            } else if (meta.goalKind === 'fuel_cells') {
+              if (physics.orbsCollected >= meta.targetValue) {
+                triggerStageComplete(speedKmh, isAirborne);
+              }
+            } else if (meta.goalKind === 'overtakes') {
+              if (physics.boostOvertakes >= meta.targetValue) {
+                triggerStageComplete(speedKmh, isAirborne);
+              }
+            } else if (meta.goalKind === 'distance' || meta.goalKind === 'mars_boss') {
+              if (physics.distanceM >= meta.targetValue) {
+                triggerStageComplete(speedKmh, isAirborne);
+              }
             }
           }
 
@@ -891,17 +1183,19 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             }
 
             // 7. Car Visual Transform, Suspension & Wheels
-            const targetPitch = coldGasActive
-              ? 0.14
-              : isAirborne
-                ? Math.max(-0.14, physics.vy * 0.012)
-                : wantSurge
-                  ? 0.035
-                  : holdBrake
-                    ? -0.045
-                    : holdAccel
-                      ? 0.018
-                      : 0;
+            const targetPitch = onRamp
+              ? 0.175
+              : coldGasActive
+                ? 0.14
+                : isAirborne
+                  ? Math.max(-0.14, physics.vy * 0.012)
+                  : wantSurge
+                    ? 0.035
+                    : holdBrake
+                      ? -0.045
+                      : holdAccel
+                        ? 0.018
+                        : 0;
             const targetRoll = -physics.vx * 0.012;
             const targetYaw = -physics.vx * 0.018;
 
@@ -917,7 +1211,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             physics.suspensionVelY *= Math.exp(-14 * dt);
             physics.suspensionOffsetY += physics.suspensionVelY * dt;
             const wheelDrop = isAirborne ? 0.12 : 0;
-            carRig.setSuspension(physics.suspensionOffsetY, wheelDrop, Math.max(0, physics.y));
+            carRig.setSuspension(
+              physics.suspensionOffsetY,
+              wheelDrop,
+              Math.max(0, physics.y - Math.max(0, rampSurfaceY)),
+            );
 
             if (physics.invulnTimer > 0) {
               carRig.root.visible = Math.floor(physics.invulnTimer * 18) % 2 === 0;
@@ -997,22 +1295,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             hudEmitTimer += dt;
             if (hudEmitTimer >= 0.04) {
               hudEmitTimer = 0;
-              onHudUpdateRef.current({
-                score: Math.floor(physics.score),
-                distanceKm: Number((physics.distanceM / 1000).toFixed(2)),
-                speedKmh,
-                coldGasPct: Math.round(physics.coldGasPct),
-                coldGasActive,
-                surgeActive: wantSurge,
-                isAirborne,
-                shields: physics.shields,
-                maxShields: 3,
-                gapsCleared: physics.gapsCleared,
-                topSpeedKmh: physics.topSpeedKmh,
-                weather: activeWeather,
-                callout: physics.callout,
-                gameOverReason: null,
-              });
+              onHudUpdateRef.current(
+                buildHudSnapshot(speedKmh, coldGasActive, wantSurge, isAirborne, null),
+              );
             }
           }
         }
